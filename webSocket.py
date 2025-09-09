@@ -47,22 +47,22 @@ def save_trade(symbol,trade):
 
 async def listen():
     url = "wss://ws.okx.com:8443/ws/v5/public"
-    async with websockets.connect(url) as ws:
-        await subscribe(ws)
-
-        while True:
-            try:
-                msg = await ws.recv()
-                data = json.loads(msg)
-                # Ελέγχουμε αν είναι trade data
-                if "data" in data and "arg" in data and data["arg"].get("channel") == "trades":
-                    symbol = data["arg"]["instId"]
-                    for trade in data["data"]:
-                        save_trade(symbol, trade)
-
-            except Exception as e:
-                print("Error:", e)
-                break
-
+    while True:
+        try:
+            async with websockets.connect(url) as ws:
+                await subscribe(ws)
+                while True:
+                    msg = await ws.recv()
+                    data = json.loads(msg)
+                    # Ελέγχουμε αν είναι trade data
+                    if "data" in data and "arg" in data and data["arg"].get("channel") == "trades":
+                        symbol = data["arg"]["instId"]
+                        for trade in data["data"]:
+                            save_trade(symbol, trade)
+        except Exception as e:
+            print("Connection error:", e)
+            print("Reconnecting in 5s...")
+            await asyncio.sleep(5)
+            
 if __name__ == "__main__":
     asyncio.run(listen())

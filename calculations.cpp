@@ -8,6 +8,8 @@
 #include <map>
 #include <thread>
 #include <cmath>
+#include <algorithm>
+
 struct Trade {
     long long Trade_Id;
     long long ts_exchange_ms;
@@ -37,58 +39,86 @@ std::map<std::string, std::vector<Trade>> trades_map;
 std::map<std::string, std::vector<std::pair<long long,double>>> moving_avgs;
 
 std::mutex moving_avgs_mutex;
-void load_trades(std::string filename, const std::string& symbol, std::chrono::steady_clock::time_point start_time,
-                           std::chrono::hours runtime_limit) {
+void load_trades(const std::string& filename, const std::string& symbol,
+                 std::chrono::steady_clock::time_point start_time,
+                 std::chrono::hours runtime_limit) 
+{
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: cannot open file " << filename << "\n";
+        return;
+    }
 
-    while (true) {
-         // check if 48h passed
-        if (std::chrono::steady_clock::now() - start_time >= runtime_limit) break;
+    // Skip header
+    std::string line;
+    if (!std::getline(file, line)) return;
 
-        std::ifstream file(filename);
-        std::string line;
+    long long last_trade_id = -1; // track processed trades
 
-        if (!file.is_open()) {
-            std::cerr << "Error: cannot open file " << filename << "\n";
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+    while (std::chrono::steady_clock::now() - start_time < runtime_limit) {
+        std::streampos pos_before = file.tellg();
+        if (!std::getline(file, line)) {
+            // No new data: clear eof and wait a bit
+            file.clear();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            file.seekg(pos_before);
             continue;
         }
-        // skip header
-        std::getline(file, line);
 
-        std::vector<Trade> new_trades;
-        while(std::getline(file,line)){
-            std::stringstream ss(line);
-            std::string item;
-            Trade t;
+        if (line.empty()) continue;
 
+        std::stringstream ss(line);
+        std::string item;
+        Trade t;
+
+        try {
             std::getline(ss, item, ',');
+            if (item.empty()) continue;
             t.Trade_Id = std::stoll(item);
-            
+            if (t.Trade_Id <= last_trade_id) continue;
+
             std::getline(ss, item, ',');
+            if (item.empty()) continue;
             t.ts_exchange_ms = std::stoll(item);
 
             std::getline(ss, item, ',');
+            if (item.empty()) continue;
             t.ts_received_ms = std::stoll(item);
 
             std::getline(ss, item, ',');
+            if (item.empty()) continue;
             t.delay = std::stoll(item);
 
             std::getline(ss, item, ',');
+            if (item.empty()) continue;
             t.price = std::stod(item);
 
             std::getline(ss, item, ',');
+            if (item.empty()) continue;
             t.volume = std::stod(item);
-
-            new_trades.push_back(t);
         }
+        catch (const std::exception& e) {
+            std::cerr << "Bad row in " << filename << " skipped: " << line << "\n";
+            continue;
+        }
+
         {
             std::lock_guard<std::mutex> lock(symbol_mutexes[symbol]);
-            trades_map[symbol] = std::move(new_trades);
+            trades_map[symbol].push_back(t);
+
+            // Keep only last 30 minutes in memory
+            const long long cutoff = current_time_ms() - (30LL * 60 * 1000);
+            trades_map[symbol].erase(
+                std::remove_if(trades_map[symbol].begin(), trades_map[symbol].end(),
+                               [&](const Trade& r){ return r.ts_exchange_ms < cutoff; }),
+                trades_map[symbol].end()
+            );
         }
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        last_trade_id = t.Trade_Id;
     }
-    
 }
+
 
 void calculate_metrics(const std::string& symbol,
                        std::chrono::steady_clock::time_point start_time,
@@ -128,9 +158,14 @@ void calculate_metrics(const std::string& symbol,
                     count++;
                 }
             }
+
+            long long cutoff = current_time_ms() - (30LL * 60 * 1000); // keep last 30min
+            trades_map[symbol].erase(
+                std::remove_if(trades_map[symbol].begin(), trades_map[symbol].end(),
+                            [&](const Trade& t){ return t.ts_exchange_ms < cutoff; }),
+                trades_map[symbol].end()
+    );
         }
-
-
         if (count > 0) {
             double moving_avg = price_sum / count;
 
@@ -139,7 +174,7 @@ void calculate_metrics(const std::string& symbol,
 
             moving_avgs[symbol].push_back({now, moving_avg});
             if (moving_avgs[symbol].size() > 1000) { // περιορίζουμε μέγεθος buffer
-                moving_avgs[symbol].erase(moving_avgs[symbol].begin());
+                moving_avgs[symbol].erase(moving_avgs[symbol].begin(),moving_avgs[symbol].begin() + 500);
                 }
             }
 
@@ -152,7 +187,9 @@ void calculate_metrics(const std::string& symbol,
         else {
             std::cout << "No trades in the last 15 minutes." << std::endl;
         }
-
+        std::ofstream proof("proof_log.csv", std::ios::app);
+        proof << buf << "," << symbol << ",OK\n";
+        proof.flush();
         sleep_until_next_minute();// Ενημέρωση κάθε 60 δευτερόλεπτα
         }
 }
@@ -255,6 +292,10 @@ int main() {
     auto start_time = std::chrono::steady_clock::now();
     std::chrono::hours runtime_limit(48);
 
+    std::vector<std::string> symbols = {"BTC","ADA","ETH","DOGE","LTC","BNB","SOL","XRP"};
+    for (const auto& s : symbols) {
+    symbol_mutexes.try_emplace(s);  // C++17: constructs value in-place (default-constructed std::mutex)
+}
     std::thread reader1(load_trades, "trades/BTC-USDT.csv", "BTC", start_time, runtime_limit);
     std::thread reader2(load_trades, "trades/ADA-USDT.csv", "ADA", start_time, runtime_limit);
     std::thread reader3(load_trades, "trades/ETH-USDT.csv", "ETH", start_time, runtime_limit);
@@ -273,7 +314,7 @@ int main() {
     std::thread calculator7(calculate_metrics, "SOL", start_time, runtime_limit);
     std::thread calculator8(calculate_metrics, "XRP", start_time, runtime_limit);
     
-    std::vector<std::string> symbols = {"BTC","ADA","ETH","DOGE","LTC","BNB","SOL","XRP"};
+
     std::thread correlation_thread(calculate_correlation, symbols, "correlations.csv", start_time, runtime_limit);
 
     reader1.join();
