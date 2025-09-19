@@ -9,6 +9,9 @@
 #include <thread>
 #include <cmath>
 #include <algorithm>
+extern "C" {
+    #include "latency_log.h"
+}
 
 struct Trade {
     long long Trade_Id;
@@ -30,6 +33,7 @@ void sleep_until_next_minute() {
     auto next_minute = time_point_cast<minutes>(now) + minutes(1);
     std::this_thread::sleep_until(next_minute);
 }
+
 // One mutex per symbol
 std::map<std::string, std::mutex> symbol_mutexes;
 
@@ -135,6 +139,12 @@ void calculate_metrics(const std::string& symbol,
     while(true){
           // check if 48h passed
         if (std::chrono::steady_clock::now() - start_time >= runtime_limit) break;
+        struct timespec deadline_ts;
+        clock_gettime(CLOCK_MONOTONIC, &deadline_ts);
+        deadline_ts.tv_sec = (deadline_ts.tv_sec / 60 ) * 60 + 60; // next minute
+        deadline_ts.tv_nsec = 0;
+
+        latency_log_set_deadline(deadline_ts);
 
         long long now = current_time_ms();
         long long window_start = now - 15 * 60 * 1000; // 15 λεπτά πριν
@@ -187,9 +197,11 @@ void calculate_metrics(const std::string& symbol,
         else {
             std::cout << "No trades in the last 15 minutes." << std::endl;
         }
-        std::ofstream proof("proof_log.csv", std::ios::app);
-        proof << buf << "," << symbol << ",OK\n";
-        proof.flush();
+        struct timespec actual;
+        clock_gettime(CLOCK_MONOTONIC, &actual);
+
+        latency_log_write(symbol.c_str(), actual);
+
         sleep_until_next_minute();// Ενημέρωση κάθε 60 δευτερόλεπτα
         }
 }
@@ -289,6 +301,8 @@ void calculate_correlation(const std::vector<std::string>& symbols,
 
 
 int main() {
+    
+    latency_log_init("proof_log.csv");   
     auto start_time = std::chrono::steady_clock::now();
     std::chrono::hours runtime_limit(48);
 
@@ -335,6 +349,8 @@ int main() {
     calculator8.join();
     correlation_thread.join();
 
+    latency_log_close();
+    
     return 0;
 }
 
