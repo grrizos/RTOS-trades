@@ -6,13 +6,13 @@
 #include <time.h>
 #include <unistd.h>
 
-// private file handle
+
 static FILE *g_logfile = NULL;
 
 // store the next deadline
 static struct timespec g_deadline = {0,0};
 
-// --- initialization ---
+// initialization 
 void latency_log_init(const char *path) {
     g_logfile = fopen(path, "w");
     if (!g_logfile) {
@@ -24,12 +24,12 @@ void latency_log_init(const char *path) {
     fflush(g_logfile);
 }
 
-// --- set deadline ---
+// set deadline 
 void latency_log_set_deadline(struct timespec deadline) {
     g_deadline = deadline;
 }
 
-// --- log metrics ---
+// log metrics 
 void latency_log_write(const char *task, struct timespec actual) {
     if (!g_logfile) return;
 
@@ -39,7 +39,7 @@ void latency_log_write(const char *task, struct timespec actual) {
         (actual.tv_nsec - g_deadline.tv_nsec);
     double latency_us = ns_gap / 1000.0;
 
-    // --- CPU idle% measurement ---
+    // CPU idle measurement
     static unsigned long long prev_idle = 0, prev_total = 0;
     FILE *fp = fopen("/proc/stat", "r");
     if (!fp) return;
@@ -69,7 +69,7 @@ void latency_log_write(const char *task, struct timespec actual) {
     prev_total = total_time;
     prev_idle = idle_time;
 
-    // current time (monotonic, nanoseconds)
+    // current time 
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     long long now_ns = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
